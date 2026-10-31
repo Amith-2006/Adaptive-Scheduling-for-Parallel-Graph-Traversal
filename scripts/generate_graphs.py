@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-import argparse, random
+import argparse
+import math
+import random
 from pathlib import Path
 
 def write_graph(path, n, edges):
@@ -21,10 +23,36 @@ def grid(n):
     return edges
 
 def erdos_renyi(n, p, rng):
-    edges=[]
+    if not 0 <= p <= 1:
+        raise ValueError("p must be between 0 and 1")
+
+    if p == 0:
+        return []
+
+    if p == 1:
+        return [
+            (u, v)
+            for u in range(n)
+            for v in range(u + 1, n)
+        ]
+
+    edges = []
+    log_failure = math.log1p(-p)
+
     for u in range(n):
-        for v in range(u+1,n):
-            if rng.random()<p: edges.append((u,v))
+        v = u + 1
+
+        while v < n:
+            skip = int(
+                math.log1p(-rng.random()) / log_failure
+            )
+
+            v += skip
+
+            if v < n:
+                edges.append((u, v))
+                v += 1
+
     return edges
 
 def rmat(n, m_factor, rng):
@@ -42,13 +70,39 @@ def rmat(n, m_factor, rng):
     return list(edges)
 
 def main():
-    ap=argparse.ArgumentParser(); ap.add_argument('--out',default='graphs'); ap.add_argument('--sizes',nargs='+',type=int,default=[1000,3000]); ap.add_argument('--seed',type=int,default=29); args=ap.parse_args()
-    out=Path(args.out); out.mkdir(parents=True,exist_ok=True)
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--out', default='graphs')
+    ap.add_argument('--sizes', nargs='+', type=int, default=[1000, 3000])
+    ap.add_argument('--seed', type=int, default=29)
+    ap.add_argument('--instances', type=int, default=3)
+    args = ap.parse_args()
+
+    if args.instances <= 0:
+        ap.error('--instances must be positive')
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+
     for n in args.sizes:
-        write_graph(out/f'grid_n{n}.edgelist',n,grid(n))
-        rng=random.Random(args.seed+n)
-        p=min(0.02, 8/max(1,n-1))
-        write_graph(out/f'er_n{n}.edgelist',n,erdos_renyi(n,p,rng))
-        write_graph(out/f'rmat_n{n}.edgelist',n,rmat(n,4,rng))
-        print(f'generated 3 graph families, n={n}')
-if __name__=='__main__': main()
+        p = min(0.02, 8 / max(1, n - 1))
+
+        for instance in range(args.instances):
+            seed = args.seed + n * 1000 + instance
+
+            grid_edges = grid(n)
+            er_edges = erdos_renyi(n, p, random.Random(seed))
+            rmat_edges = rmat(n, 4, random.Random(seed + 1))
+
+            suffix = f'n{n}_instance{instance + 1}'
+
+            write_graph(out / f'grid_{suffix}.edgelist', n, grid_edges)
+            write_graph(out / f'er_{suffix}.edgelist', n, er_edges)
+            write_graph(out / f'rmat_{suffix}.edgelist', n, rmat_edges)
+
+        print(
+            f'generated {args.instances * 3} graphs, '
+            f'n={n}, instances={args.instances}'
+        )
+
+if __name__ == '__main__':
+    main()

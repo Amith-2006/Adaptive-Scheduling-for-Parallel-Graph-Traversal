@@ -334,7 +334,12 @@ int main(int argc, char** argv) {
             << "level_seconds\n";
 
         for (int r = 0; r < repeats; ++r) {
-            for (const auto& scheduler : schedulers) {
+            for (size_t i = 0; i < schedulers.size(); ++i) {
+                const size_t index = (i + static_cast<size_t>(r))
+                    % schedulers.size();
+
+                const std::string& scheduler = schedulers[index];
+
                 Run result = bfs(g, scheduler, threads, r);
 
                 if (result.dist != reference) {
