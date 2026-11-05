@@ -1,0 +1,7 @@
+family_scale,edge_balanced,guided,static
+er_50000,19,0,1
+er_500000,20,0,0
+grid_50000,0,0,20
+grid_500000,0,20,0
+rmat_50000,0,20,0
+rmat_500000,0,20,0
