@@ -5,3 +5,5 @@ results/*.csv
 results/analysis/
 logs/
 graphs/
+# Generated experiment outputs; full reproducibility data is distributed separately
+/results/

@@ -13,13 +13,22 @@ def write_graph(path, n, edges):
         f.write(f'{n} {len(clean)}\n')
         for u,v in sorted(clean): f.write(f'{u} {v}\n')
 
-def grid(n):
-    w=max(1,int(n**0.5)); h=(n+w-1)//w
-    edges=[]
+def grid(n, w=None):
+    if w is None:
+        w = max(1, int(n**0.5))
+
+    h = (n + w - 1) // w
+    edges = []
+
     for u in range(n):
-        r,c=divmod(u,w)
-        if c+1<w and u+1<n: edges.append((u,u+1))
-        if u+w<n: edges.append((u,u+w))
+        r, c = divmod(u, w)
+
+        if c + 1 < w and u + 1 < n:
+            edges.append((u, u + 1))
+
+        if u + w < n:
+            edges.append((u, u + w))
+
     return edges
 
 def erdos_renyi(n, p, rng):
@@ -89,7 +98,8 @@ def main():
         for instance in range(args.instances):
             seed = args.seed + n * 1000 + instance
 
-            grid_edges = grid(n)
+            grid_width = max(1, round(math.sqrt(n) * (0.8 + 0.1 * instance)))
+            grid_edges = grid(n, grid_width)
             er_edges = erdos_renyi(n, p, random.Random(seed))
             rmat_edges = rmat(n, 4, random.Random(seed + 1))
 

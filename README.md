@@ -1,146 +1,169 @@
-# Adaptive Scheduling for Parallel Breadth-First Search (BFS)
+# Adaptive Scheduling for Parallel Breadth-First Search
 
-An experimental research project investigating whether graph-frontier characteristics can guide scheduling decisions in parallel Breadth-First Search (BFS).
+An experimental study of scheduling strategies for parallel Breadth-First Search (BFS), implemented in C++17 and OpenMP.
 
-The project evaluates multiple OpenMP scheduling strategies and explores the potential for an adaptive scheduler that selects a strategy based on frontier-level graph statistics.
+The project investigates how graph structure and BFS frontier characteristics influence scheduler performance. It implements four scheduling strategies and evaluates a graph-level threshold policy that selects a scheduler before BFS execution.
 
-## Research Motivation
+## 1. Project Overview
 
-Parallel BFS performance depends on the structure of the current frontier. Different scheduling strategies may perform differently depending on the distribution of vertex degrees and the amount of work associated with each frontier vertex.
+Parallel BFS performance depends on the distribution of work across frontier vertices. A frontier containing vertices with highly varying degrees can produce load imbalance when work is distributed uniformly.
 
-This project investigates the following hypothesis:
+This project evaluates:
+- Static OpenMP scheduling
+- Dynamic OpenMP scheduling
+- Guided OpenMP scheduling
+- Custom Edge-Balanced scheduling
+- A graph-level threshold policy using root degree and vertex count
+- Exploratory machine-learning approaches for scheduler prediction
 
-**Can per-level frontier statistics predict which parallel BFS scheduling strategy will perform best, and can adaptive scheduler selection improve end-to-end execution time?**
+The final threshold policy makes one scheduler selection per graph. It does not switch schedulers during BFS execution.
 
-The hypothesis is being evaluated experimentally. Its generality and research novelty have not yet been established.
+## 2. Scheduling Strategies
 
-## Implemented Scheduling Strategies
-
-The current benchmark evaluates four strategies:
-
-- **Static:** OpenMP static scheduling.
-- **Dynamic:** OpenMP dynamic scheduling.
-- **Guided:** OpenMP guided scheduling.
-- **Edge-Balanced:** Partitions frontier vertices using cumulative degree information to distribute estimated edge-processing work across threads.
-
-The edge-balanced strategy partitions whole vertices; it does not split individual high-degree vertices.
-
-## System Overview
-
-The benchmark pipeline consists of:
-
-1. Synthetic graph generation.
-2. Graph loading and BFS execution.
-3. Parallel scheduling using four strategies.
-4. Frontier-level feature extraction.
-5. Per-level runtime logging.
-6. Correctness validation against sequential BFS.
-7. Experimental analysis.
-
-## Frontier-Level Features
-
-The benchmark records:
-
-| Feature | Description |
+| Strategy | Description |
 |---|---|
-| Frontier size | Number of vertices in the current frontier |
-| Frontier edges | Total adjacency edges associated with frontier vertices |
-| Degree mean | Mean frontier vertex degree |
-| Degree variance | Degree dispersion within the frontier |
-| Degree skewness | Asymmetry of the degree distribution |
-| Degree CV | Coefficient of variation of frontier degrees |
+| Static | Uses OpenMP static scheduling |
+| Dynamic | Uses OpenMP dynamic scheduling with chunk size 1 |
+| Guided | Uses OpenMP guided scheduling with chunk size 1 |
+| Edge-Balanced | Partitions frontier vertices using cumulative degree information to distribute estimated edge-processing work |
 
-These features are being investigated as potential predictors of scheduler performance.
+The Edge-Balanced implementation partitions whole vertices. It does not split an individual high-degree vertex across threads. Its implementation uses per-thread candidate storage followed by serial deduplication and distance updates.
 
-## Graph Workloads
+## 3. Final Graph-Level Threshold Policy
 
-The graph generator supports:
+The final policy uses two graph-level inputs:
+- Root degree: the degree of the BFS source vertex.
+- Vertex count: the number of vertices in the graph.
 
-- Grid graphs
-- Erdős–Rényi random graphs
-- R-MAT graphs
+The policy selects one scheduler before BFS begins:
 
-Graph sizes and instance counts can be configured through command-line arguments.
+```cpp
+if (root_degree <= 3) {
+    scheduler = (n == 50000) ? "static" : "guided";
+} else if (root_degree <= 1594) {
+    scheduler = "edge_balanced";
+} else {
+    scheduler = "guided";
+}
+```
 
-Note: Generated graph instances should not automatically be treated as independent samples. In particular, the current grid generator produces identical topology for a given graph size.
+The policy does not use graph-family labels as direct inputs, does not use a machine-learning model, and does not adapt the scheduler at each BFS level. Dynamic scheduling is not selected by this policy.
 
-## Experimental Setup
+## 4. Experimental Evaluation
 
-Current experimental environment:
+### Workloads
 
-- Hardware: Apple MacBook Air, Apple Silicon
-- CPU: 10 cores
-- RAM: 16 GB
-- Compiler: Apple Clang
-- Parallel runtime: OpenMP (`libomp`)
-- Language: C++17
-- Python: 3.9.6
+The final held-out evaluation contains 120 synthetic graphs:
 
-### Completed Benchmark Experiments
+| Graph family | 50,000 vertices | 500,000 vertices |
+|---|---:|---:|
+| Erdős–Rényi (ER) | 20 | 20 |
+| Grid | 20 | 20 |
+| R-MAT | 20 | 20 |
+| **Total** | **60** | **60** |
 
-A 50,000-vertex benchmark was conducted using:
+The held-out graph files have unique content hashes and no exact hash overlap with the original graph dataset.
 
-- 5 Erdős–Rényi instances
-- 5 Grid files (one unique topology)
-- 5 R-MAT instances
-- 4 scheduling strategies
-- 30 repetitions per graph
+### Benchmark configuration
 
-This resulted in **1,800 scheduler executions**.
+- Four baseline scheduling strategies
+- 30 baseline repetitions per graph and scheduler
+- Two policy evaluation sessions
+- 30 Guided and 30 threshold-policy repetitions per graph in each session
+- Four configured OpenMP threads
+- Correctness comparison against sequential BFS distance vectors
 
-All tested scheduler outputs passed comparison against the sequential BFS distance-vector oracle.
+The combined policy evaluation therefore contains 60 repetitions per graph for Guided and 60 for the threshold policy.
 
-### Preliminary Findings
+All evaluated policy executions passed the sequential BFS correctness check.
 
-Median speedup relative to static scheduling:
+### Main results
 
-| Graph family | Dynamic | Guided | Edge-Balanced |
-|---|---:|---:|---:|
-| Erdős–Rényi | -23.81% | +4.49% | +8.06% |
-| Grid | -7.26% | -0.15% | +0.46% |
-| R-MAT | +4.56% | +15.75% | +8.73% |
+The reported runtime effect compares the threshold policy with the fixed Guided baseline. Negative values indicate that the threshold policy is faster.
 
-Positive values indicate faster execution than static scheduling.
+| Measure | Result |
+|---|---:|
+| Mean graph-level runtime effect | -2.2102% |
+| Pooled runtime effect | -1.3193% |
+| Graphs where policy was faster | 85 / 120 |
+| Graphs where policy was slower | 35 / 120 |
+| Agreement with baseline oracle scheduler | 95.83% |
 
-These results are preliminary measurements from one hardware platform. The Grid files have identical topology, and repeated timing trials are not independent graph instances. Further experiments and statistical validation are required before drawing general conclusions.
+The mean graph-level effect weights each graph equally. The pooled effect compares summed per-graph median runtimes and therefore weights graphs by runtime.
 
-## Repository Structure
+The policy does not improve every graph or every workload group. Its measured effects vary by graph family and scale. In particular, the R-MAT groups show small regressions on average, while the 500,000-vertex Grid group is approximately neutral.
+
+Graph-level bootstrap intervals and additional robustness checks are included in the reproducibility package. These intervals are conditional on the two evaluation sessions and the tested machine; they do not quantify variability across machines or hardware environments.
+
+## 5. Exploratory Machine-Learning Experiments
+
+The repository also contains exploratory scripts that investigate whether frontier features can predict scheduler performance.
+
+These experiments are separate from the final threshold policy.
+
+| Script | Purpose |
+|---|---|
+| `scripts/analyze.py` | Grouped cross-validation for predicting per-level scheduler oracle labels |
+| `scripts/evaluate_early_policy.py` | Decision-tree experiments using early BFS observations |
+| `scripts/evaluate_graph_policy.py` | Cross-scale classification using root frontier degree |
+| `scripts/leave_one_family_out.py` | Leave-One-Family-Out evaluation across ER, Grid and R-MAT |
+
+These scripts use retrospective scheduler timing measurements to construct oracle labels. Their predictions and regret measurements should not be interpreted as proof of an online adaptive scheduler or as validation of the final threshold policy.
+
+Some exploratory scripts expect earlier 15-graph datasets and machine-specific input paths. Check their command-line arguments and input requirements before running them on another machine.
+
+## 6. Repository Structure
 
 ```text
 project29/
 ├── src/
 │   ├── bfs_bench.cpp
+│   ├── bfs_bench_family_policy.cpp
 │   ├── partition.h
 │   └── partition_test.cpp
 ├── scripts/
 │   ├── generate_graphs.py
 │   ├── run_suite.py
-│   └── analyze.py
-├── graphs/
-├── results/
+│   ├── analyze.py
+│   ├── plot_results.py
+│   ├── evaluate_early_policy.py
+│   ├── evaluate_graph_policy.py
+│   └── leave_one_family_out.py
+├── figures/
+├── ARCHITECTURE.md
 ├── Makefile
 ├── requirements.txt
 └── README.md
 ```
 
-Generated graph datasets, build artifacts, and experimental output files are excluded from version control.
+Generated graphs, build outputs and local experiment results are excluded from ordinary Git version control. The complete final reproducibility dataset and experiment outputs are distributed separately as a versioned GitHub Release archive.
 
-## Build and Run
+## 7. Build Instructions
 
 ### Requirements
 
 - C++17 compiler
 - OpenMP runtime
-- Python 3.9+
-- Dependencies from `requirements.txt`
+- Python 3.9 or later
+- Python packages listed in `requirements.txt`
 
-### macOS Build
+### macOS with Homebrew OpenMP
 
-With Homebrew `libomp` installed, compile using:
+Install the OpenMP runtime if required:
+
+```bash
+brew install libomp
+```
+
+Create the build directory:
 
 ```bash
 mkdir -p build
+```
 
+Build the original four-scheduler benchmark:
+
+```bash
 clang++ -O3 -std=c++17 -Wall -Wextra \
   -Xpreprocessor -fopenmp \
   -I/opt/homebrew/opt/libomp/include \
@@ -150,13 +173,28 @@ clang++ -O3 -std=c++17 -Wall -Wextra \
   -o build/bfs_bench
 ```
 
-### Install Python Dependencies
+Build the final threshold-policy benchmark:
+
+```bash
+clang++ -O3 -std=c++17 -Wall -Wextra \
+  -Xpreprocessor -fopenmp \
+  -Isrc \
+  -I/opt/homebrew/opt/libomp/include \
+  src/bfs_bench_family_policy.cpp \
+  -L/opt/homebrew/opt/libomp/lib \
+  -lomp \
+  -o build/bfs_bench_family_policy
+```
+
+## 8. Python Environment
+
+Install the Python dependencies:
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-### Generate Graphs
+Generate example synthetic graphs:
 
 ```bash
 python3 scripts/generate_graphs.py \
@@ -166,7 +204,7 @@ python3 scripts/generate_graphs.py \
   --seed 29
 ```
 
-### Run the Benchmark
+Run the original benchmark suite:
 
 ```bash
 python3 scripts/run_suite.py \
@@ -177,7 +215,7 @@ python3 scripts/run_suite.py \
   --repeats 10
 ```
 
-### Analyze Results
+Analyze its output:
 
 ```bash
 python3 scripts/analyze.py \
@@ -185,37 +223,38 @@ python3 scripts/analyze.py \
   --out results/analysis
 ```
 
-## Experimental Considerations
+The example commands above demonstrate the original benchmark workflow. They do not reproduce the final 120-graph threshold-policy experiment; use the reproducibility package for that experiment.
 
-- Keep all levels belonging to the same graph in the same train/test partition.
-- Compare simpler frontier features against extended degree-distribution features.
-- Report medians and variability across repeated trials.
-- Validate every parallel scheduler against sequential BFS.
-- Include feature-extraction and switching overhead when evaluating an adaptive scheduler.
-- Distinguish repeated timing trials from independent graph instances.
-- Avoid generalizing results from a single hardware platform.
+## 9. Reproducibility
 
-## Current Limitations
+The full reproducibility archive contains:
+- The 120 held-out graph files
+- Baseline per-level measurements
+- Both policy evaluation sessions
+- Combined analysis CSV files
+- Analysis and graph-generation scripts
+- Plotting scripts and generated figures
+- Source code for the final threshold policy
+- Independent analysis reproduction outputs
+- SHA-256 checksums and verification records
+- Reproduction instructions
 
-- Adaptive scheduler selection has not yet been implemented or validated.
-- Feature-based scheduler prediction remains under investigation.
-- The edge-balanced strategy cannot split a single high-degree vertex.
-- Current benchmark results are from one hardware platform.
-- More independent graph instances and larger workloads are required.
-- Feature extraction and scheduler switching costs must be included in end-to-end evaluation.
+The archive is distributed as a GitHub Release asset so that large datasets do not need to be stored in ordinary Git history.
 
-## Future Work
+## 10. Limitations
 
-- Investigate relationships between frontier statistics and scheduler performance.
-- Improve graph workload diversity.
-- Evaluate feature-based adaptive scheduling.
-- Measure prediction regret against an oracle scheduler.
-- Compare adaptive execution against fixed scheduling strategies.
-- Evaluate end-to-end performance, including decision overhead.
-- Validate results across additional hardware platforms.
+- The evaluation uses three synthetic graph families.
+- Held-out graphs are new instances within those families; this is not validation on an unseen graph family.
+- Experiments were conducted on one Apple Silicon machine.
+- Cross-machine and cross-architecture performance validation has not been performed.
+- The threshold policy is not guaranteed to outperform Guided on every graph.
+- Edge-Balanced scheduling cannot split the work of an individual high-degree vertex.
+- Serial deduplication and distance updates may limit Edge-Balanced parallel scalability.
+- The bootstrap intervals do not capture between-machine or between-environment variability.
+- Exploratory ML results are distinct from the final threshold-policy evaluation.
 
-## Project Status
+## 11. Project Status
 
-**Research in progress.**
+The four-scheduler benchmark, graph-level threshold policy, held-out evaluation, correctness checks and reproducibility package have been implemented.
 
-This repository contains the experimental implementation and preliminary benchmark infrastructure for investigating adaptive parallel BFS scheduling. Results and conclusions will be updated as further experiments are completed.
+Further work is needed to evaluate additional graph families, larger workloads and different hardware platforms.

@@ -1,0 +1,445 @@
+
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <numeric>
+#include <queue>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <omp.h>
+#include "partition.h"
+
+
+using Graph = std::vector<std::vector<int>>;
+
+
+struct Stats {
+    double mean = 0;
+    double variance = 0;
+    double skew = 0;
+    double cv = 0;
+    long long edges = 0;
+};
+
+Graph read_graph(const std::string& path) {
+    std::ifstream in(path);
+
+    if (!in) {
+        throw std::runtime_error("cannot open graph: " + path);
+    }
+
+    int n, m;
+
+    if (!(in >> n >> m) || n <= 0 || m < 0) {
+        throw std::runtime_error("invalid graph header");
+    }
+
+    Graph g(static_cast<size_t>(n));
+
+    for (int i = 0; i < m; ++i) {
+        int u, v;
+
+        if (!(in >> u >> v)) {
+            throw std::runtime_error("invalid edge data");
+        }
+
+        if (u < 0 || u >= n || v < 0 || v >= n) {
+            throw std::runtime_error("edge endpoint out of range");
+        }
+
+        if (u == v) {
+            continue;
+        }
+
+        g[u].push_back(v);
+        g[v].push_back(u);
+    }
+
+    for (auto& neighbors : g) {
+        std::sort(neighbors.begin(), neighbors.end());
+        neighbors.erase(
+            std::unique(neighbors.begin(), neighbors.end()),
+            neighbors.end()
+        );
+    }
+
+    return g;
+}
+
+std::vector<int> sequential_bfs(const Graph& g) {
+    const int n = static_cast<int>(g.size());
+
+    std::vector<int> dist(static_cast<size_t>(n), -1);
+    std::queue<int> q;
+
+    dist[0] = 0;
+    q.push(0);
+
+    while (!q.empty()) {
+        int u = q.front();
+        q.pop();
+
+        for (int v : g[u]) {
+            if (dist[v] == -1) {
+                dist[v] = dist[u] + 1;
+                q.push(v);
+            }
+        }
+    }
+
+    return dist;
+}
+
+Stats frontier_stats(const Graph& g, const std::vector<int>& frontier) {
+    Stats s;
+
+    if (frontier.empty()) {
+        return s;
+    }
+
+    std::vector<double> degrees;
+    degrees.reserve(frontier.size());
+
+    for (int u : frontier) {
+        double degree = static_cast<double>(g[u].size());
+        degrees.push_back(degree);
+        s.edges += static_cast<long long>(g[u].size());
+    }
+
+    s.mean = std::accumulate(
+        degrees.begin(), degrees.end(), 0.0
+    ) / static_cast<double>(degrees.size());
+
+    double m2 = 0;
+    double m3 = 0;
+
+    for (double x : degrees) {
+        double z = x - s.mean;
+        m2 += z * z;
+        m3 += z * z * z;
+    }
+
+    double count = static_cast<double>(degrees.size());
+
+    s.variance = m2 / count;
+
+    double sd = std::sqrt(s.variance);
+
+    s.cv = s.mean != 0 ? sd / s.mean : 0;
+
+    s.skew = sd > 0
+        ? (m3 / count) / (sd * sd * sd)
+        : 0;
+
+    return s;
+}
+
+struct Run {
+    std::vector<int> dist;
+    double seconds = 0;
+    std::vector<std::string> rows;
+};
+
+Run bfs(
+    const Graph& g,
+    const std::string& scheduler,
+    int threads,
+    int trial
+) {
+    const int n = static_cast<int>(g.size());
+
+    Run out;
+    out.dist.assign(static_cast<size_t>(n), -1);
+    out.dist[0] = 0;
+
+    std::vector<int> frontier{0};
+    int level = 0;
+
+    while (!frontier.empty()) {
+        Stats st = frontier_stats(g, frontier);
+
+        const double t0 = omp_get_wtime();
+
+        int nt = std::max(1, threads);
+
+        std::vector<std::vector<int>> local(
+            static_cast<size_t>(nt)
+        );
+
+        std::vector<int> newly_seen(static_cast<size_t>(n), 0);
+        std::vector<int> next;
+
+        if (scheduler == "edge_balanced") {
+            std::vector<long long> prefix(frontier.size() + 1, 0);
+
+            for (size_t i = 0; i < frontier.size(); ++i) {
+                prefix[i + 1] = prefix[i] +
+                    static_cast<long long>(g[frontier[i]].size());
+            }
+
+
+            #pragma omp parallel num_threads(nt)
+{
+    int tid = omp_get_thread_num();
+    int actual_threads = omp_get_num_threads();
+
+    std::vector<size_t> boundaries =
+        calculate_boundaries(
+            prefix,
+            actual_threads,
+            frontier.size()
+        );
+
+    size_t a = boundaries[tid];
+    size_t b = boundaries[tid + 1];
+
+    for (size_t i = a; i < b; ++i) {
+        for (int v : g[frontier[i]]) {
+            if (out.dist[v] == -1) {
+                local[tid].push_back(v);
+            }
+        }
+    }
+}
+        } else if (scheduler == "static") {
+            #pragma omp parallel for schedule(static) num_threads(nt)
+            for (long long i = 0;
+                 i < static_cast<long long>(frontier.size());
+                 ++i) {
+                int tid = omp_get_thread_num();
+
+                for (int v : g[frontier[static_cast<size_t>(i)]]) {
+                    if (out.dist[v] == -1) {
+                        local[tid].push_back(v);
+                    }
+                }
+            }
+        } else if (scheduler == "dynamic") {
+            #pragma omp parallel for schedule(dynamic, 1) num_threads(nt)
+            for (long long i = 0;
+                 i < static_cast<long long>(frontier.size());
+                 ++i) {
+                int tid = omp_get_thread_num();
+
+                for (int v : g[frontier[static_cast<size_t>(i)]]) {
+                    if (out.dist[v] == -1) {
+                        local[tid].push_back(v);
+                    }
+                }
+            }
+        } else if (scheduler == "guided") {
+            #pragma omp parallel for schedule(guided, 1) num_threads(nt)
+            for (long long i = 0;
+                 i < static_cast<long long>(frontier.size());
+                 ++i) {
+                int tid = omp_get_thread_num();
+
+                for (int v : g[frontier[static_cast<size_t>(i)]]) {
+                    if (out.dist[v] == -1) {
+                        local[tid].push_back(v);
+                    }
+                }
+            }
+        } else {
+            throw std::runtime_error(
+                "unknown scheduler: " + scheduler
+            );
+        }
+
+        for (const auto& bucket : local) {
+            for (int v : bucket) {
+                if (out.dist[v] == -1 && !newly_seen[v]) {
+                    newly_seen[v] = 1;
+                    next.push_back(v);
+                }
+            }
+        }
+
+        for (int v : next) {
+            out.dist[v] = level + 1;
+        }
+
+        double elapsed = omp_get_wtime() - t0;
+
+        std::ostringstream row;
+
+        row << trial << ','
+            << scheduler << ','
+            << level << ','
+            << frontier.size() << ','
+            << st.edges << ','
+            << std::setprecision(10)
+            << st.mean << ','
+            << st.variance << ','
+            << st.skew << ','
+            << st.cv << ','
+            << elapsed << '\n';
+
+        out.rows.push_back(row.str());
+        out.seconds += elapsed;
+
+        frontier.swap(next);
+        ++level;
+    }
+
+    return out;
+}
+
+
+int main(int argc, char** argv) {
+    if (argc != 5) {
+        std::cerr
+            << "Usage: bfs_bench_family_policy GRAPH.edgelist THREADS OUT_PREFIX REPEATS\n";
+        return 2;
+    }
+
+    try {
+        std::string path = argv[1];
+        std::string prefix = argv[3];
+
+        int threads = std::stoi(argv[2]);
+        int repeats = std::stoi(argv[4]);
+
+        if (threads <= 0 || repeats <= 0) {
+            throw std::runtime_error(
+                "THREADS and REPEATS must be positive"
+            );
+        }
+
+        Graph g = read_graph(path);
+        const std::vector<int> reference = sequential_bfs(g);
+
+        const long long root_degree =
+            static_cast<long long>(g[0].size());
+
+        const int n = static_cast<int>(g.size());
+
+        std::ofstream levels(prefix + "_levels.csv");
+        std::ofstream summary(prefix + "_summary.csv");
+
+        if (!levels || !summary) {
+            throw std::runtime_error("cannot open output files");
+        }
+
+        levels
+            << "trial,mode,scheduler,level,frontier_size,frontier_edges,"
+            << "degree_mean,degree_variance,degree_skew,degree_cv,"
+            << "level_seconds\n";
+
+        summary
+            << "trial,mode,scheduler,vertices,root_degree,"
+            << "selection_seconds,bfs_wall_seconds,level_seconds,"
+            << "total_seconds,correct\n";
+
+        const std::vector<std::string> modes = {
+            "guided",
+            "threshold_policy"
+        };
+
+        for (int r = 0; r < repeats; ++r) {
+            for (int j = 0; j < 2; ++j) {
+                int index = (j + r) % 2;
+                const std::string& mode = modes[index];
+
+                const double total_start = omp_get_wtime();
+
+                double selection_seconds = 0.0;
+                std::string scheduler;
+
+                if (mode == "guided") {
+                    scheduler = "guided";
+                } else {
+                    const double selection_start = omp_get_wtime();
+
+                    if (root_degree <= 3) {
+                        scheduler = (n == 50000)
+                            ? "static"
+                            : "guided";
+                    } else if (root_degree <= 1594) {
+                        scheduler = "edge_balanced";
+                    } else {
+                        scheduler = "guided";
+                    }
+
+                    selection_seconds =
+                        omp_get_wtime() - selection_start;
+                }
+
+                const double bfs_start = omp_get_wtime();
+
+                Run result = bfs(g, scheduler, threads, r);
+
+                const double bfs_wall_seconds =
+                    omp_get_wtime() - bfs_start;
+
+                const double total_seconds =
+                    omp_get_wtime() - total_start;
+
+                bool correct = (result.dist == reference);
+
+                if (!correct) {
+                    throw std::runtime_error(
+                        "BFS correctness mismatch: mode=" + mode +
+                        " scheduler=" + scheduler
+                    );
+                }
+
+                for (const auto& row : result.rows) {
+                    std::string tagged = row;
+                    size_t pos = tagged.find(',');
+                    if (pos != std::string::npos) {
+                        tagged.insert(pos, "," + mode);
+                    }
+                    levels << tagged;
+                }
+
+                summary
+                    << r << ','
+                    << mode << ','
+                    << scheduler << ','
+                    << n << ','
+                    << root_degree << ','
+                    << std::setprecision(12)
+                    << selection_seconds << ','
+                    << bfs_wall_seconds << ','
+                    << result.seconds << ','
+                    << total_seconds << ','
+                    << (correct ? 1 : 0) << '\n';
+
+                std::cerr
+                    << "trial=" << r
+                    << " mode=" << mode
+                    << " scheduler=" << scheduler
+                    << " selection_seconds=" << selection_seconds
+                    << " bfs_wall_seconds=" << bfs_wall_seconds
+                    << " total_seconds=" << total_seconds
+                    << " correctness=" << (correct ? "PASS" : "FAIL")
+                    << '\n';
+            }
+        }
+
+        levels.flush();
+        summary.flush();
+
+        if (!levels || !summary) {
+            throw std::runtime_error("failed while writing output");
+        }
+
+        std::cerr
+            << "PASS: all runs match sequential BFS; vertices="
+            << g.size() << '\n';
+
+        std::cerr << "Summary: " << prefix << "_summary.csv\n";
+        std::cerr << "Levels: " << prefix << "_levels.csv\n";
+
+    } catch (const std::exception& e) {
+        std::cerr << "ERROR: " << e.what() << '\n';
+        return 1;
+    }
+
+    return 0;
+}
