@@ -227,7 +227,17 @@ The example commands above demonstrate the original benchmark workflow. They do 
 
 ## 9. Reproducibility
 
-The full reproducibility archive contains:
+### Complete Reproducibility Package
+
+The complete experimental package is available as a versioned GitHub Release asset.
+
+**[Download Project 29 — Reproducibility Package v1.0.0](https://github.com/Amith-2006/Adaptive-Scheduling-for-Parallel-Graph-Traversal/releases/download/v1.0.0/project29_reproducibility_v1.zip)**
+
+- **Release:** [v1.0.0 — Reproducibility Package](https://github.com/Amith-2006/Adaptive-Scheduling-for-Parallel-Graph-Traversal/releases/tag/v1.0.0)
+- **Archive:** `project29_reproducibility_v1.zip`
+- **Size:** 1,068,760,309 bytes (approximately 1.07 GB)
+
+The archive contains:
 - The 120 held-out graph files
 - Baseline per-level measurements
 - Both policy evaluation sessions
@@ -239,7 +249,34 @@ The full reproducibility archive contains:
 - SHA-256 checksums and verification records
 - Reproduction instructions
 
-The archive is distributed as a GitHub Release asset so that large datasets do not need to be stored in ordinary Git history.
+### Published Results and Figures
+
+- [Analysis CSV files](paper-results/analysis/)
+- [Publication figures (PDF and PNG)](paper-results/figures/)
+- [Results documentation and metric definitions](paper-results/README.md)
+
+### Download and Integrity Verification
+
+Download the archive using the direct release link above, or run:
+
+```bash
+curl -L -o project29_reproducibility_v1.zip \
+  https://github.com/Amith-2006/Adaptive-Scheduling-for-Parallel-Graph-Traversal/releases/download/v1.0.0/project29_reproducibility_v1.zip
+```
+
+Verify its SHA-256 checksum:
+
+```bash
+shasum -a 256 project29_reproducibility_v1.zip
+```
+
+Expected SHA-256:
+
+```text
+c578308d64351d8a08b64a37e355366ec42139445d2df503ab6fc71e6d95ad2a
+```
+
+The checksum helps verify the integrity of the downloaded release asset. Large datasets and experimental outputs are distributed through GitHub Releases rather than ordinary Git history.
 
 ## 10. Limitations
 
